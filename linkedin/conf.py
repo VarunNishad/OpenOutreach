@@ -46,7 +46,7 @@ DEFAULT_FOLLOW_UP_DAILY_LIMIT = 25
 # Active-hours schedule (daemon pauses outside this window)
 # Set to False to run 24/7.
 # ----------------------------------------------------------------------
-ENABLE_ACTIVE_HOURS = True
+ENABLE_ACTIVE_HOURS = False
 ACTIVE_START_HOUR = 9   # inclusive, local time
 ACTIVE_END_HOUR = 19    # exclusive, local time
 ACTIVE_TIMEZONE = system_timezone()

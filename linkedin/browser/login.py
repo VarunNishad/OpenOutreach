@@ -141,7 +141,10 @@ def start_browser_session(session: "AccountSession"):
             error_message="Saved session invalid",
         )
 
-    session.page.wait_for_load_state("load")
+    # "domcontentloaded" — "load" waits for every subresource (analytics
+    # beacons, lazy media) and on LinkedIn that event may never fire,
+    # hanging the daemon for the duration of the BROWSER_DEFAULT_TIMEOUT.
+    session.page.wait_for_load_state("domcontentloaded")
     logger.info(colored("Browser ready", "green", attrs=["bold"]))
 
 

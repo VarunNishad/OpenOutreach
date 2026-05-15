@@ -1,26 +1,37 @@
-"""LLM model factory: build a pydantic-ai `Model` from `SiteConfig`.
+"""LLM model factory + sync boundary for pydantic-ai.
 
-Single boundary for LLM construction. Call sites import `get_llm_model()` and
-hand the result to `pydantic_ai.Agent(...)`. Provider-specific routing lives
-here so the rest of the codebase stays provider-agnostic.
+Two public entry points:
 
-Importing this module also applies ``nest_asyncio`` once. pydantic-ai's
-``Agent.run_sync`` wraps an async ``run`` in ``loop.run_until_complete``;
-something in its internals (anyio task group / portal) leaves the daemon
-thread's running-loop slot populated across calls, which trips the
-re-entrancy guard in ``BaseEventLoop._check_running`` on every subsequent
-``run_sync`` (``RuntimeError: This/Cannot run the event loop``). The
-official pydantic-ai troubleshooting recipe — same one used for Jupyter /
-Colab / Marimo — is ``nest_asyncio.apply()``, which patches the loop to
-allow nested ``run_until_complete``. See:
-https://pydantic.dev/docs/ai/overview/troubleshooting/
+- `get_llm_model()` — builds a `pydantic_ai.Model` from `SiteConfig`,
+  routing to the right provider.
+- `run_agent_sync(coro)` — drives a pydantic-ai coroutine to completion
+  from sync code, on a dedicated worker thread with a long-lived event
+  loop. Used everywhere instead of `Agent.run_sync`.
+
+Why a persistent worker thread (not `Agent.run_sync`, not `asyncio.run`):
+
+- `Agent.run_sync` uses an anyio portal that leaves the caller thread's
+  running-loop slot populated. Subsequent sync Playwright calls on the
+  daemon thread then raise
+  `"using Playwright Sync API inside the asyncio loop"`.
+- `asyncio.run` per call closes its loop on exit. The openai / anthropic
+  SDKs wrap `httpx.AsyncClient` in a subclass whose `__del__` does
+  `get_running_loop().create_task(self.aclose())`. If GC fires the
+  wrapper from call N during call N+1's loop, the cleanup task tries to
+  close a transport bound to call N's now-closed loop →
+  `RuntimeError: Event loop is closed`.
+
+A single long-lived loop on a dedicated thread eliminates both: all HTTP
+clients live on the same loop forever, and the runner thread's asyncio
+slot stays inside this module — the caller thread is never touched.
 """
 from __future__ import annotations
 
-import nest_asyncio
+import asyncio
+import threading
+from typing import Awaitable, Callable, TypeVar
 
-nest_asyncio.apply()
-
+_T = TypeVar("_T")
 
 # Override the SDK default of 2. Each retry uses the SDK's built-in jittered
 # exponential backoff and honors `Retry-After`, so 8 attempts ride through
@@ -28,7 +39,54 @@ nest_asyncio.apply()
 _MAX_RETRIES = 8
 
 
-# ── Per-provider builders ──
+# ── Async runner ─────────────────────────────────────────────────────
+
+class _AgentRunner:
+    """Owns one persistent asyncio loop on a dedicated daemon thread.
+
+    Construct lazily via `_get_runner()` so importing this module is free.
+    The thread is a daemon, so no explicit shutdown is needed — it ends
+    with the process.
+    """
+
+    def __init__(self):
+        self._loop = asyncio.new_event_loop()
+        ready = threading.Event()
+        threading.Thread(
+            target=self._serve, args=(ready,), daemon=True, name="llm-runner",
+        ).start()
+        ready.wait()
+
+    def _serve(self, ready: threading.Event) -> None:
+        asyncio.set_event_loop(self._loop)
+        ready.set()
+        self._loop.run_forever()
+
+    def run(self, coro: Awaitable[_T]) -> _T:
+        """Submit *coro* to the runner loop; block until it completes."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
+
+_runner: _AgentRunner | None = None
+_runner_lock = threading.Lock()
+
+
+def _get_runner() -> _AgentRunner:
+    """Return the process-wide runner, creating it on first call."""
+    global _runner
+    if _runner is None:
+        with _runner_lock:
+            if _runner is None:
+                _runner = _AgentRunner()
+    return _runner
+
+
+def run_agent_sync(coro: Awaitable[_T]) -> _T:
+    """Drive *coro* on the dedicated LLM runner thread + loop."""
+    return _get_runner().run(coro)
+
+
+# ── Per-provider builders ────────────────────────────────────────────
 
 def _build_openai(cfg):
     from openai import AsyncOpenAI
@@ -82,7 +140,7 @@ def _build_openai_compatible(cfg):
     ))
 
 
-_PROVIDER_BUILDERS = {
+_PROVIDER_BUILDERS: dict[str, Callable] = {
     "openai": _build_openai,
     "anthropic": _build_anthropic,
     "google": _build_google,
@@ -93,7 +151,7 @@ _PROVIDER_BUILDERS = {
 }
 
 
-# ── Public API ──
+# ── Model factory ────────────────────────────────────────────────────
 
 def _validated_site_config():
     """Load `SiteConfig` and assert the required LLM fields are populated."""

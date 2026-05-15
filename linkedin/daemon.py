@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import random
-import threading
 import time
 from datetime import timedelta
 from zoneinfo import ZoneInfo
@@ -22,7 +21,7 @@ from linkedin.conf import (
     REST_DAYS,
 )
 from linkedin.diagnostics import failure_diagnostics
-from linkedin.exceptions import AuthenticationError, BrowserUnresponsiveError
+from linkedin.exceptions import AuthenticationError
 from linkedin.ml.qualifier import BayesianQualifier, KitQualifier
 from linkedin.models import Task
 from linkedin.tasks.check_pending import handle_check_pending
@@ -35,15 +34,6 @@ _HANDLERS = {
     Task.TaskType.CONNECT: handle_connect,
     Task.TaskType.CHECK_PENDING: handle_check_pending,
     Task.TaskType.FOLLOW_UP: handle_follow_up,
-}
-
-# Hard ceilings per task type — if a handler doesn't return inside this
-# window the watchdog closes the browser session to unwedge Playwright and
-# the daemon marks the task FAILED.
-TASK_WATCHDOG_SECONDS = {
-    Task.TaskType.CONNECT: 10 * 60,
-    Task.TaskType.CHECK_PENDING: 5 * 60,
-    Task.TaskType.FOLLOW_UP: 10 * 60,
 }
 
 HEARTBEAT_INTERVAL = 300  # 5 minutes
@@ -107,7 +97,7 @@ class _CloudPromoRotator:
         )
 
 
-# ── Heartbeat + watchdog ─────────────────────────────────────────────
+# ── Heartbeat ────────────────────────────────────────────────────────
 
 
 class Heartbeat:
@@ -141,43 +131,6 @@ def sleep_with_heartbeat(seconds: float, heartbeat: Heartbeat, context: str) -> 
             return
         time.sleep(min(HEARTBEAT_SLICE, remaining))
         heartbeat.maybe_log(context)
-
-
-def run_task_with_watchdog(handler, task, session, qualifiers) -> None:
-    """Execute *handler* under a per-task hard ceiling.
-
-    On timeout, closes the browser session to unwedge Playwright. The
-    handler's next call into the closed session raises (Playwright error),
-    which propagates out and the daemon's generic-except path marks the
-    task FAILED; reconcile re-creates it on the next idle cycle. If the
-    handler somehow returns despite the timer firing, we raise
-    ``BrowserUnresponsiveError`` so the task is still marked failed.
-    """
-    timeout_s = TASK_WATCHDOG_SECONDS.get(task.task_type, 10 * 60)
-    fired = threading.Event()
-
-    def _unwedge():
-        fired.set()
-        logger.error(
-            "Task watchdog fired on %s after %ds — closing browser", task, timeout_s,
-        )
-        try:
-            session.close()
-        except Exception:
-            logger.debug("session.close() raised inside watchdog", exc_info=True)
-
-    timer = threading.Timer(timeout_s, _unwedge)
-    timer.daemon = True
-    timer.start()
-    try:
-        handler(task, session, qualifiers)
-    finally:
-        timer.cancel()
-
-    if fired.is_set():
-        raise BrowserUnresponsiveError(
-            f"Task {task} watchdog fired after {timeout_s}s"
-        )
 
 
 # ── Human-rhythm pacing ──────────────────────────────────────────────
@@ -378,7 +331,7 @@ def run_daemon(session):
 
         try:
             with failure_diagnostics(session):
-                run_task_with_watchdog(handler, task, session, qualifiers)
+                handler(task, session, qualifiers)
         except AuthenticationError:
             logger.warning("Session expired during %s — re-authenticating", task)
             try:

@@ -82,7 +82,7 @@ def extract_facts(text: str, *, context: str = "") -> list[str]:
 
     from pydantic_ai import Agent
 
-    from linkedin.llm import get_llm_model
+    from linkedin.llm import get_llm_model, run_agent_sync
 
     system = _FACT_EXTRACTION_PROMPT
     if context:
@@ -94,7 +94,7 @@ def extract_facts(text: str, *, context: str = "") -> list[str]:
         output_type=FactList,
         model_settings={"temperature": 0.0, "timeout": 60},
     )
-    result: FactList = agent.run_sync(text).output
+    result: FactList = run_agent_sync(agent.run(text)).output
     return list(result.facts)
 
 
@@ -200,7 +200,7 @@ def update_chat_summary(deal, new_messages) -> None:
 # Mirrors mem0/memory/main.py::Memory._add_to_vector_store reconciliation
 # (pinned commit c239d8a4, upstream lines 594-700) with two substitutions:
 #   - vector-store ops → in-memory dict (Deal.chat_summary is a flat list)
-#   - mem0's `self.llm.generate_response` → pydantic-ai Agent.run_sync
+#   - mem0's `self.llm.generate_response` → pydantic-ai Agent.run via run_agent_sync
 
 def reconcile_facts(existing: list[str], new_facts: list[str]) -> list[str]:
     """Reconcile `new_facts` against `existing` via mem0's UPDATE prompt.
@@ -223,13 +223,13 @@ def _request_memory_actions(existing: list[str], new_facts: list[str]) -> list[_
     """
     from pydantic_ai import Agent
 
-    from linkedin.llm import get_llm_model
+    from linkedin.llm import get_llm_model, run_agent_sync
 
     old_memory = [{"id": str(idx), "text": fact} for idx, fact in enumerate(existing)]
     prompt = get_update_memory_messages(old_memory, new_facts, None)
 
     agent = Agent(get_llm_model(), model_settings={"temperature": 0.0, "timeout": 60})
-    text = agent.run_sync(prompt).output
+    text = run_agent_sync(agent.run(prompt)).output
     return _ReconcileResponse.model_validate(_parse_memory_response(text)).memory
 
 
