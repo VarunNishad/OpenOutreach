@@ -130,13 +130,14 @@ Three apps in `INSTALLED_APPS`:
 - **`django_settings.py`** — Django settings (SQLite at `data/db.sqlite3`). Apps: crm, chat, linkedin.
 
 
-## `linkedin_cli/` — Standalone LinkedIn Library (Django-free)
+## `linkedin_cli` — Standalone LinkedIn Library (Django-free)
 
-Extracted package holding the LinkedIn *platform mechanics* (browser nav, login
-form, Voyager API, profile/conversation scrape, the connect/message/status/thread
-verbs), so the daemon and external agents share one surface. Imports with **no
-Django** configured and holds no DB. Lives inside this repo for now; destined for
-its own repo + submodule. (Roadmap: `extract-linkedin-cli`.)
+External package ([`eracle/linkedin-cli`](https://github.com/eracle/linkedin-cli),
+installed via the `requirements/base.txt` git dependency) holding the LinkedIn
+*platform mechanics* (browser nav, login form, Voyager API, profile/conversation
+scrape, the connect/message/status/thread verbs), so the daemon and external
+agents share one surface. Imports with **no Django** configured and holds no DB.
+The module docs below describe the installed package's surface.
 
 **Transport — bind + connect.** A session *owner* launches a browser and
 `browser.bind()`s it (Playwright ≥1.59); clients attach via `chromium.connect()`
