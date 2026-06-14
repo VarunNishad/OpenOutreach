@@ -12,11 +12,9 @@ import logging
 import sys
 from dataclasses import dataclass, field
 
-import questionary
-
 from openoutreach.core.conf import DEFAULT_CONNECT_DAILY_LIMIT, DEFAULT_EMAIL_DAILY_LIMIT
 from openoutreach.core.models import SiteConfig
-from openoutreach.core.onboarding_wizard import _BACK, MultilineText
+from openoutreach.core.onboarding_wizard import _BACK, IntText, MultilineText, Password
 from openoutreach.crm.models import Deal, DealState, Lead
 from openoutreach.emails.icemail import parse_mailboxes
 from openoutreach.emails.models import Mailbox
@@ -46,32 +44,66 @@ def email_state() -> str:
 
 # ── Nudge copy ───────────────────────────────────────────────────
 
-# GAIN/LOGIC — the discovery engine works; the volume channel is missing.
+# GAIN — the discovery engine already worked; email is the reach you're missing.
 NO_FINDER_NUDGE = """
-📧  Reach your qualified leads by email — LinkedIn finds them, email closes them.
-    Your model has qualified {qualified} leads; LinkedIn safely sends only
-    ~{connect_cap} connects/day. Email reaches the same list far faster.
-    Turn on enrichment (a paid finder — that's how the tool stays free):
+📧  LinkedIn finds the right people; email is how you reach them.
+    Your model qualified {qualified} leads, but LinkedIn sends only ~{connect_cap}/day
+    and most never accept. Email reaches the whole list — automatically, as they qualify.
+    Turn on email finding (a paid finder; the affiliate fee keeps OpenOutreach free):
       {finder_url}
 """
 
-# FEAR — the qualified leads found, then left unreached behind the connect cap.
+# URGENCY — the ~2-week warmup clock (always true); a loss-aversion line only
+# when the pipeline numbers are real (they're zero right after the finder is set).
 NO_MAILBOX_NUDGE = """
-📧  {pending} qualified leads sent connection requests that were never accepted —
-    aging out behind LinkedIn's daily cap.
-    {resolved_emails} of your leads already have an email resolved and waiting.
-    Finish email setup to reach them.
-    Cold-email mailboxes (IceMail — paid; needs ~2-week warmup):
+📧  Set up email sending. IceMail mailboxes need a ~2-week warmup, and the clock
+    only starts once you add them — so the sooner they're warming, the sooner you
+    reach the leads who never accept a LinkedIn connection.
+{waiting_line}    Add your sending mailboxes (IceMail — paid; warmup is hands-off):
       {sender_url}
 """
 
 
-def render(state: str, stats: dict) -> str:
-    """The nudge copy for *state*, filled with the user's pipeline numbers."""
+def _hyperlink(url: str) -> str:
+    """Wrap *url* in an OSC 8 terminal hyperlink so the whole address is clickable.
+
+    Terminals' bare-URL detection often stops at the ``?``, leaving affiliate
+    query params (``?fpr=...``) unclickable. OSC 8 marks the entire URL as one
+    link explicitly. The visible text stays the URL itself, so terminals without
+    OSC 8 support still show a copyable address.
+    """
+    esc = "\033"
+    return f"{esc}]8;;{url}{esc}\\{url}{esc}]8;;{esc}\\"
+
+
+def render(state: str, stats: dict, *, hyperlink: bool = False) -> str:
+    """The nudge copy for *state*, filled with the user's pipeline numbers.
+
+    ``hyperlink=True`` wraps the affiliate URLs in OSC 8 escapes for an
+    interactive TTY; leave it False for headless logging (no escape codes).
+    """
     template = NO_FINDER_NUDGE if state == NO_FINDER else NO_MAILBOX_NUDGE
+    wrap = _hyperlink if hyperlink else (lambda u: u)
     return template.format(
-        finder_url=FINDER_AFFILIATE_URL, sender_url=SENDER_AFFILIATE_URL, **stats
+        finder_url=wrap(FINDER_AFFILIATE_URL),
+        sender_url=wrap(SENDER_AFFILIATE_URL),
+        waiting_line=_waiting_line(stats),
+        **stats,
     )
+
+
+def _waiting_line(stats: dict) -> str:
+    """The mailbox nudge's loss-aversion line — shown only when its number is real.
+
+    Right after the finder is enabled nothing has resolved yet, so both counts are
+    zero and the line is omitted; the warmup urgency carries the message. Returns a
+    full indented line ending in a newline, or '' to collapse it out of the copy.
+    """
+    if stats.get("resolved_emails"):
+        return f"    {stats['resolved_emails']} leads already have an email resolved, waiting to be reached.\n"
+    if stats.get("pending"):
+        return f"    {stats['pending']} leads sit behind connection requests that may never be accepted.\n"
+    return ""
 
 
 def pipeline_stats() -> dict:
@@ -121,32 +153,57 @@ def import_mailboxes(pasted: str, daily_limit: int = DEFAULT_EMAIL_DAILY_LIMIT) 
 # ── Interactive prompt ───────────────────────────────────────────
 
 def prompt_email_setup() -> None:
-    """Show the next setup step; collect config interactively on a TTY.
+    """Drive the email-setup steps: finder key, then IceMail mailboxes.
 
-    Skipping (empty input / Ctrl+D), a bad paste, and a failing auth-check are
-    all handled gracefully and re-ask next launch — there is no opt-out, by
-    design. Headless runs log the nudge instead of prompting. Unlike onboarding
-    this never `sys.exit`s, so it can't block the LinkedIn discovery leg.
+    On a TTY, walks every remaining step in one session (set the finder and you
+    are asked to paste mailboxes right after, not next launch). Headless, it can
+    only log the next pending step. Never `sys.exit`s, so it can't block the
+    LinkedIn discovery leg.
     """
+    if sys.stdin.isatty():
+        _walk_setup_steps()
+    else:
+        _log_pending_step()
+
+
+def _log_pending_step() -> None:
+    """Headless fallback: log the next pending step (no TTY to collect on)."""
     state = email_state()
-    if state == CONFIGURED:
-        return
+    if state != CONFIGURED:
+        logger.info(render(state, pipeline_stats()))
 
-    message = render(state, pipeline_stats())
-    if not sys.stdin.isatty():
-        logger.info(message)
-        return
 
-    print(message)
+def _walk_setup_steps() -> None:
+    """Prompt each remaining step in turn, stopping at the first one skipped.
+
+    A skipped step (empty input / Ctrl+D) leaves the setup state unchanged, which
+    ends the walk; the rest are re-asked next launch — no opt-out, by design.
+    """
+    while True:
+        state = email_state()
+        if state == CONFIGURED:
+            return
+        if not _prompt_step(state):
+            return  # skipped — leave the remaining steps for next launch
+
+
+def _prompt_step(state: str) -> bool:
+    """Show one setup step and collect it. True if it advanced the setup state.
+
+    Collectors handle their own failure modes (bad paste, auth reject) gracefully
+    and simply leave the state unadvanced, so this never raises on user error.
+    """
+    print(render(state, pipeline_stats(), hyperlink=True))
     _COLLECT_BY_STATE[state]()
+    return email_state() != state
 
 
 def _collect_finder_key() -> None:
-    key = questionary.password("Finder API key (Enter to skip):").ask()
-    if not key or not key.strip():
+    key = Password("finder_api_key", "Finder API key (Enter to skip):", required=False).ask("")
+    if not key or key == _BACK:
         return
     cfg = SiteConfig.load()
-    cfg.finder_api_key = key.strip()
+    cfg.finder_api_key = key
     cfg.save()
     logger.info("Finder key saved — enrichment is on; emails resolve as leads qualify.")
 
@@ -166,15 +223,15 @@ def _collect_mailboxes() -> None:
 
 def _ask_for_daily_limit() -> int:
     """Per-mailbox warm-safe sends/day; Enter accepts the conservative default."""
-    answer = questionary.text(
+    answer = IntText(
+        "email_daily_limit",
         "Emails per mailbox per day (Enter for default):",
-        default=str(DEFAULT_EMAIL_DAILY_LIMIT),
-    ).ask()
-    try:
-        value = int((answer or "").strip())
-        return value if value > 0 else DEFAULT_EMAIL_DAILY_LIMIT
-    except (TypeError, ValueError):
+        default=DEFAULT_EMAIL_DAILY_LIMIT,
+        required=False,
+    ).ask(DEFAULT_EMAIL_DAILY_LIMIT)
+    if not isinstance(answer, int) or answer <= 0:
         return DEFAULT_EMAIL_DAILY_LIMIT
+    return answer
 
 
 def _ask_for_paste() -> str | None:
