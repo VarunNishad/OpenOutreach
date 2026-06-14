@@ -127,10 +127,29 @@ def _save_qualification_result(session, qualifier: BayesianQualifier, lead_id: i
         #          its only door, and the connection harvests contact info on
         #          acceptance. A miss is free to retry (BetterContact bills only
         #          usable hits).
-        if deal.lead.resolve_api_email() is True:
+        if _resolve_email(session, deal.lead):
             set_profile_state(session, public_id, DealState.READY_TO_EMAIL)
     else:
         create_disqualified_deal(session, public_id, reason=reason)
+
+
+def _resolve_email(session, lead) -> bool:
+    """Resolution waterfall: free contacts-store read first, paid finder second.
+
+    A finder hit is given back to the central store (moment 1). Returns whether
+    an email was resolved — i.e. whether to route the Deal to READY_TO_EMAIL.
+    """
+    from openoutreach.contacts import service as contacts
+
+    cached_email = contacts.resolve_lead(lead)
+    if cached_email:
+        lead.api_email = cached_email
+        lead.save(update_fields=["api_email"])
+        return True
+    if lead.resolve_api_email() is True:
+        contacts.contribute_lead(session, lead, lead.api_email)
+        return True
+    return False
 
 
 def _fetch_profile_text(session, lead_id: int, public_id: str) -> str | None:

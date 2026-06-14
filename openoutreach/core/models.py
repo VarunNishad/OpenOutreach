@@ -30,6 +30,13 @@ class SiteConfig(models.Model):
     # BetterContact email-finder key; blank disables enrichment (see emails/finder.py).
     finder_api_key = models.CharField(max_length=500, blank=True, default="")
 
+    # Central contacts service (see openoutreach/contacts/). The token is earned
+    # on the first contribution and persisted here — never in the repo; blank
+    # means "not registered yet" (resolve misses until the first give-back mints
+    # it). The URL is blank by default (falls back to DEFAULT_CONTACTS_API_URL).
+    contacts_api_token = models.CharField(max_length=500, blank=True, default="")
+    contacts_api_url = models.CharField(max_length=500, blank=True, default="")
+
     class Meta:
         verbose_name = "Site Configuration"
         verbose_name_plural = "Site Configuration"
