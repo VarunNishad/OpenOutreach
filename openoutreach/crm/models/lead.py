@@ -96,10 +96,11 @@ class Lead(models.Model):
     def resolve_api_email(self) -> bool | None:
         """Resolve + persist a work email via the finder, once the lead qualifies.
 
-        Returns True on a hit (``api_email`` set, cached — never re-resolved),
-        False on a genuine miss (finder ran, found nothing → caller parks the
-        Deal in NO_EMAIL), and None when the finder couldn't run (no key, or
-        the service was unreachable → caller leaves the Deal QUALIFIED to retry).
+        Returns True on a hit (``api_email`` set, cached — never re-resolved →
+        caller routes the Deal QUALIFIED → READY_TO_EMAIL), False on a genuine
+        miss (finder ran, found nothing → caller leaves the Deal QUALIFIED for
+        the connect leg), and None when the finder couldn't run (no key, or the
+        service was unreachable → caller leaves the Deal QUALIFIED to retry).
         A miss is free to retry — BetterContact bills only usable hits.
         """
         if self.api_email:

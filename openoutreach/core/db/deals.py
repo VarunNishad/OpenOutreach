@@ -10,11 +10,12 @@ logger = logging.getLogger(__name__)
 _STATE_LOG_STYLE = {
     DealState.QUALIFIED: ("QUALIFIED", "green", []),
     DealState.READY_TO_CONNECT: ("READY_TO_CONNECT", "yellow", ["bold"]),
+    DealState.READY_TO_EMAIL: ("READY_TO_EMAIL", "blue", ["bold"]),
+    DealState.EMAILED: ("EMAILED", "blue", []),
     DealState.PENDING: ("PENDING", "cyan", []),
     DealState.CONNECTED: ("CONNECTED", "green", ["bold"]),
     DealState.COMPLETED: ("COMPLETED", "green", ["bold"]),
     DealState.FAILED: ("FAILED", "red", ["bold"]),
-    DealState.NO_EMAIL: ("NO_EMAIL", "yellow", []),
 }
 
 
@@ -140,11 +141,50 @@ def set_profile_state(session, public_identifier: str, new_state: str, reason: s
 
 
 def get_qualified_profiles(session) -> list:
-    return _deals_at_state(session, DealState.QUALIFIED)
+    """Connect-eligible QUALIFIED deals — those WITHOUT a resolved email.
+
+    Enrichment routes, it doesn't gate: a lead with ``api_email`` is reached on
+    the EMAIL channel and excluded here, so the scarce connect is spent only on
+    leads whose only door is LinkedIn (the connection then harvests their
+    contact info on acceptance). This is the single connect-pool chokepoint —
+    ready_pool promotes from here, so email-having leads never reach
+    READY_TO_CONNECT.
+    """
+    from openoutreach.crm.models import Deal
+
+    qs = Deal.objects.filter(
+        state=DealState.QUALIFIED,
+        campaign=session.campaign,
+        lead__api_email__isnull=True,
+    ).select_related("lead")
+    return [_deal_to_profile_dict(d) for d in qs]
 
 
 def get_ready_to_connect_profiles(session) -> list:
     return _deals_at_state(session, DealState.READY_TO_CONNECT)
+
+
+def get_emailable_deals(session):
+    """The email pool — Deals queued for their single Layer-1 email, oldest first.
+
+    Symmetric with the connect pools above: each reads exactly one FSM state. The
+    state alone is the eligibility — the qualify router reaches READY_TO_EMAIL only
+    on a finder hit (so ``Lead.api_email`` is set), and the send moves it to EMAILED
+    (so it is never-emailed). Returns ``Deal`` rows (not profile dicts — the EMAIL
+    task acts on the Deal directly). ``disqualified`` guards a post-qualification
+    do-not-contact, matching the follow_up pool.
+    """
+    from openoutreach.crm.models import Deal
+
+    return (
+        Deal.objects.filter(
+            campaign=session.campaign,
+            state=DealState.READY_TO_EMAIL,
+            lead__disqualified=False,
+        )
+        .select_related("lead", "mailbox")
+        .order_by("creation_date")
+    )
 
 
 def get_profile_dict_for_public_id(session, public_id: str) -> dict | None:

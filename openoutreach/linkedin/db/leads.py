@@ -86,6 +86,10 @@ def get_leads_for_qualification(session) -> list:
     """
     from openoutreach.crm.models import Lead
 
+    # Invariant (convention, not DB-enforced): a disqualified lead is never given
+    # a NEW deal. It may still hold a terminal FAILED deal (see connect.py's
+    # unreachable path, which disqualifies + FAILs together). Every deal-creating
+    # query must filter disqualified=False to uphold this.
     leads = Lead.objects.filter(
         disqualified=False,
     ).exclude(

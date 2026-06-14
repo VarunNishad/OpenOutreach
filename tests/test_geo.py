@@ -1,10 +1,12 @@
-# tests/test_gdpr.py
+# tests/test_geo.py
 import pytest
 from unittest.mock import MagicMock
 
-from openoutreach.linkedin.setup.gdpr import (
+from openoutreach.linkedin.setup.geo import (
+    EEA_UK_CH,
     GDPR_COUNTRY_CODES,
     apply_gdpr_newsletter_override,
+    is_eea_located,
     is_gdpr_protected,
 )
 
@@ -97,3 +99,59 @@ def test_override_missing_code_respects_existing_config():
     session = _make_fake_session(subscribe=False)
     apply_gdpr_newsletter_override(session, None)
     assert session.linkedin_profile.subscribe_newsletter is False
+
+
+# ── is_eea_located (data-collection regime) ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        # EU
+        ("de", True),
+        ("fr", True),
+        ("es", True),
+        ("ie", True),
+        # EEA non-EU
+        ("no", True),
+        ("is", True),
+        ("li", True),
+        # UK + CH
+        ("gb", True),
+        ("ch", True),
+        # NOT in the collection-regime set (collectable) — these are the
+        # email-opt-in countries that GDPR_COUNTRY_CODES wrongly catches.
+        ("br", False),
+        ("ca", False),
+        ("au", False),
+        ("jp", False),
+        ("kr", False),
+        ("nz", False),
+        # Plainly non-protected
+        ("us", False),
+        ("in", False),
+        ("ae", False),
+        ("sg", False),
+        ("ng", False),
+    ],
+)
+def test_eea_located_lookup(code, expected):
+    assert is_eea_located(code) is expected
+
+
+def test_eea_located_case_insensitivity():
+    assert is_eea_located("DE") is True
+    assert is_eea_located("Br") is False
+
+
+def test_eea_located_missing_or_blank_defaults_to_excluded():
+    assert is_eea_located(None) is True
+    assert is_eea_located("") is True
+    assert is_eea_located("   ") is True
+
+
+def test_eea_uk_ch_excludes_email_optin_countries():
+    # Brazil (LATAM market) and friends must NOT be in the collection set.
+    assert {"br", "ca", "au", "jp", "kr", "nz"}.isdisjoint(EEA_UK_CH)
+    # but the full EEA/UK/CH line is present
+    assert {"de", "fr", "no", "is", "li", "gb", "ch"}.issubset(EEA_UK_CH)

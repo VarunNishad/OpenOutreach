@@ -75,9 +75,16 @@ def load_kit_model(kit_dir: Path):
     Pipeline, a bare estimator, or any future model architecture.
     """
     try:
-        import joblib
+        import warnings
 
-        model = joblib.load(kit_dir / "model.joblib")
+        import joblib
+        from sklearn.exceptions import InconsistentVersionWarning
+
+        # The shipped kit is pickled at a fixed sklearn version; tolerate skew
+        # with the locally installed version (the estimator still predicts fine).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InconsistentVersionWarning)
+            model = joblib.load(kit_dir / "model.joblib")
 
         if not hasattr(model, "predict"):
             logger.debug("[Freemium] Kit model has no predict() method")

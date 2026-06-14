@@ -6,6 +6,7 @@ import random
 import sys
 import time
 from datetime import timedelta
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from django.utils import timezone
@@ -24,6 +25,7 @@ from openoutreach.linkedin.diagnostics import failure_diagnostics
 from linkedin_cli.exceptions import AuthenticationError, CheckpointChallengeError
 from openoutreach.linkedin.ml.qualifier import BayesianQualifier, KitQualifier
 from openoutreach.core.models import Task
+from openoutreach.emails.tasks.send import handle_email
 from openoutreach.linkedin.tasks.check_pending import handle_check_pending
 from openoutreach.linkedin.tasks.connect import handle_connect
 from openoutreach.linkedin.tasks.follow_up import handle_follow_up
@@ -34,6 +36,7 @@ _HANDLERS = {
     Task.TaskType.CONNECT: handle_connect,
     Task.TaskType.CHECK_PENDING: handle_check_pending,
     Task.TaskType.FOLLOW_UP: handle_follow_up,
+    Task.TaskType.EMAIL: handle_email,
 }
 
 HEARTBEAT_INTERVAL = 300  # 5 minutes
@@ -111,18 +114,31 @@ class Heartbeat:
         self._interval = interval
         self._last = time.monotonic()
 
-    def maybe_log(self, context: str) -> None:
+    def maybe_log(self, context: str | Callable[[], str]) -> None:
         now = time.monotonic()
         if now - self._last < self._interval:
             return
         self._last = now
-        logger.info(colored("alive", "cyan") + " — %s", context)
+        text = context() if callable(context) else context
+        logger.info(colored("alive", "cyan") + " — %s", text)
 
 
-def sleep_with_heartbeat(seconds: float, heartbeat: Heartbeat, context: str) -> None:
+def _hm(seconds: float) -> str:
+    """Format a duration as ``Hh MMm`` (e.g. ``0h08m``)."""
+    h, m = int(seconds // 3600), int(seconds % 3600 // 60)
+    return f"{h}h{m:02d}m"
+
+
+def sleep_with_heartbeat(
+    seconds: float, heartbeat: Heartbeat, context: str | Callable[[float], str]
+) -> None:
     """``time.sleep(seconds)`` that wakes every ``HEARTBEAT_SLICE`` seconds to
     let *heartbeat* fire. Use for any idle sleep longer than the heartbeat
     interval so the daemon never goes silent for more than 5 minutes.
+
+    *context* is either a fixed string or a callable taking the live remaining
+    seconds — pass a callable for a heartbeat that counts down instead of
+    replaying a frozen label.
     """
     end = time.monotonic() + seconds
     while True:
@@ -130,7 +146,10 @@ def sleep_with_heartbeat(seconds: float, heartbeat: Heartbeat, context: str) -> 
         if remaining <= 0:
             return
         time.sleep(min(HEARTBEAT_SLICE, remaining))
-        heartbeat.maybe_log(context)
+        if callable(context):
+            heartbeat.maybe_log(lambda: context(max(0.0, end - time.monotonic())))
+        else:
+            heartbeat.maybe_log(context)
 
 
 # ── Human-rhythm pacing ──────────────────────────────────────────────
@@ -308,10 +327,10 @@ def run_daemon(session):
     while True:
         pause = seconds_until_active()
         if pause > 0:
-            h, m = int(pause // 3600), int(pause % 3600 // 60)
-            logger.info("Outside active hours — sleeping %dh%02dm", h, m)
+            logger.info("Outside active hours — sleeping %s", _hm(pause))
             sleep_with_heartbeat(
-                pause, heartbeat, f"outside active hours, {h}h{m:02d}m left",
+                pause, heartbeat,
+                lambda left: f"outside active hours, {_hm(left)} left",
             )
             rhythm.reset()
             continue
@@ -331,10 +350,9 @@ def run_daemon(session):
                 rhythm.reset()
                 continue
             if wait > 0:
-                h, m = int(wait // 3600), int(wait % 3600 // 60)
-                logger.info("Next task in %dh%02dm — sleeping", h, m)
+                logger.info("Next task in %s — sleeping", _hm(wait))
                 sleep_with_heartbeat(
-                    wait, heartbeat, f"next task in {h}h{m:02d}m",
+                    wait, heartbeat, lambda left: f"next task in {_hm(left)}",
                 )
                 rhythm.reset()
             continue

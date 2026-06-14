@@ -16,12 +16,13 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 choices=[
                     ("Qualified", "Qualified"),
+                    ("Ready to Email", "Ready To Email"),
+                    ("Emailed", "Emailed"),
                     ("Ready to Connect", "Ready To Connect"),
                     ("Pending", "Pending"),
                     ("Connected", "Connected"),
                     ("Completed", "Completed"),
                     ("Failed", "Failed"),
-                    ("No Email", "No Email"),
                 ],
                 default="Qualified",
                 max_length=20,

@@ -10,11 +10,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Literal
 
-import jinja2
 from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
-from openoutreach.core.conf import PROMPTS_DIR
+from openoutreach.core.agents.prompt import _format_facts
 from openoutreach.core.llm import get_llm_model, run_agent_sync
 
 logger = logging.getLogger(__name__)
@@ -101,14 +100,6 @@ def _count_unanswered_outgoing(messages: list) -> int:
     return count
 
 
-def _format_facts(summary: dict | None) -> str:
-    """Render a `{facts: [...]}` summary blob as a bullet list."""
-    facts = (summary or {}).get("facts") or []
-    if not facts:
-        return "(none yet)"
-    return "\n".join(f"- {f}" for f in facts)
-
-
 def _log_chat_facts(public_id: str, deal) -> None:
     """Log the mem0 chat facts the agent is working with."""
     chat_facts = (deal.chat_summary or {}).get("facts", [])
@@ -120,36 +111,27 @@ def _log_chat_facts(public_id: str, deal) -> None:
 
 
 def _load_recent_messages(deal, limit: int = RECENT_MESSAGES_WINDOW) -> list:
-    """Last `limit` ChatMessages for `deal`, in chronological order."""
+    """Last `limit` ChatMessages for `deal`, in chronological order.
+
+    ChatMessages are LinkedIn DMs only; an email-routed deal never connected, so
+    this is empty for it — the email agent always composes a first touch.
+    """
     from openoutreach.chat.models import ChatMessage
 
-    qs = (
-        ChatMessage.objects
-        .filter(deal=deal)
-        .order_by("-creation_date", "-pk")[:limit]
-    )
+    qs = ChatMessage.objects.filter(deal=deal).order_by("-creation_date", "-pk")[:limit]
     return list(reversed(list(qs)))
 
 
 def _render_system_prompt(session, deal, recent_messages: list) -> str:
-    """Render the agent system prompt from the Jinja2 template."""
+    """Render the LinkedIn follow-up prompt: shared base + the LinkedIn-only extras."""
     from django.utils import timezone
-
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(PROMPTS_DIR)))
-    template = env.get_template("follow_up_agent.j2")
-
-    campaign = deal.campaign
-    self_prof = session.self_profile
-    self_name = f"{self_prof.get('first_name', '')} {self_prof.get('last_name', '')}".strip() or session.django_user.username
+    from openoutreach.core.agents.prompt import base_context, render
 
     now = timezone.now()
-    return template.render(
-        self_name=self_name,
+    return render(
+        "follow_up_agent.j2",
+        **base_context(session, deal),
         contact_email=session.linkedin_profile.linkedin_username,
-        product_docs=campaign.product_docs or "",
-        campaign_objective=campaign.campaign_objective or "",
-        booking_link=campaign.booking_link or "",
-        profile_summary=_format_facts(deal.profile_summary),
         chat_summary=_format_facts(deal.chat_summary),
         recent_messages=_format_recent_messages(recent_messages, now),
         today=now.strftime("%Y-%m-%d"),
@@ -159,15 +141,16 @@ def _render_system_prompt(session, deal, recent_messages: list) -> str:
 
 
 def run_follow_up_agent(session, deal) -> FollowUpDecision:
-    """Read conversation and return a structured follow-up decision.
+    """Read the LinkedIn conversation and return a structured follow-up decision.
 
-    Sync chat first (which folds new messages into ``deal.chat_summary``),
-    then render the prompt from the Deal's persistent summaries plus a small
-    recency window of verbatim messages, and ask the LLM to decide.
+    Syncs chat first (folding new messages into ``deal.chat_summary``), then renders
+    the prompt from the Deal's persistent summaries plus a small recency window of
+    verbatim messages, and asks the LLM to decide. Email is a separate, single-shot
+    path — see ``core.agents.email_opener.compose_opener_email``.
     """
+    public_id = deal.lead.public_identifier
     from openoutreach.linkedin.db.chat import sync_conversation
 
-    public_id = deal.lead.public_identifier
     sync_conversation(session, public_id)
     deal.refresh_from_db(fields=["chat_summary", "profile_summary"])
     _log_chat_facts(public_id, deal)

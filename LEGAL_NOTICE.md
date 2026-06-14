@@ -40,10 +40,18 @@ OpenOutreach is free to use under a **freemium model**. In exchange for free acc
 - **Impact on you**: These messages appear as sent from **your** account.
 - **Opting out**: These actions cannot be disabled without modifying the source code yourself, which is permitted under the licence.
 
-### 5. Your Responsibility
+### 5. Email Enrichment and Cold Email Outreach
+OpenOutreach can resolve work email addresses for your qualified leads through a **third-party email-finder service** (e.g. BetterContact) and send outreach email from **sending infrastructure you own** (e.g. IceMail mailboxes). Both the finder and the sender are **paid third-party services you sign up for and configure yourself** — OpenOutreach may earn an affiliate commission when you sign up through a link it surfaces. OpenOutreach never sends email through its own servers on your behalf: every message is sent from a mailbox **you** own and control, using **your** credentials.
+
+- **Data protection**: Resolving and storing a person's work email is processing of personal data. In jurisdictions with data-protection law (GDPR, UK GDPR, LGPD, etc.) **you are the data controller** and are responsible for having a lawful basis, honoring access/erasure/objection requests, and any required disclosures. OpenOutreach provides the mechanism, not legal cover.
+- **Anti-spam law**: Sending unsolicited commercial email is regulated — CAN-SPAM (US), GDPR/ePrivacy (EU/EEA), CASL (Canada), the Spam Act (Australia), and others. Requirements commonly include truthful sender and subject lines, a valid physical postal address, and a working, honored opt-out/unsubscribe mechanism. **You are solely responsible** for ensuring every email you send through this tool complies with the laws applicable to you and to each recipient.
+- **Deliverability and account risk**: Cold email can get your domains and mailboxes throttled, blacklisted, or suspended by your provider. Sending from **secondary/lookalike domains** and warming mailboxes (as the recommended providers do) mitigates but does not eliminate this. The risk is yours.
+- **Accuracy**: Finder results may be wrong, stale, or belong to a different person. You are responsible for whom you contact and what you send.
+
+### 6. Your Responsibility
 By downloading, installing, configuring, or running OpenOutreach, you:
 - Confirm you are of legal age and have authority to accept these terms
-- Agree to use the tool only in compliance with all applicable laws (including data protection/privacy laws like GDPR if relevant)
+- Agree to use the tool only in compliance with all applicable laws (including data protection/privacy laws like GDPR and anti-spam laws like CAN-SPAM/CASL where relevant)
 - Accept full responsibility for any consequences of automation on your LinkedIn account(s)
 - Understand that modifying the code to remove/disable freemium promotional actions is permitted under the licence, but doing so remains your responsibility
 

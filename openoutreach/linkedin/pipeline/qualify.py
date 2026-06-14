@@ -103,7 +103,8 @@ def run_qualification(session, qualifier: BayesianQualifier) -> str | None:
 def _save_qualification_result(session, qualifier: BayesianQualifier, lead_id: int, public_id: str, embedding: np.ndarray, label: int, reason: str):
     # LLM rejections are tracked as FAILED Deals with "Disqualified" closing reason
     # (campaign-scoped), not as Lead.disqualified (permanent account-level exclusion).
-    from openoutreach.core.db.deals import create_disqualified_deal
+    from openoutreach.core.db.deals import create_disqualified_deal, set_profile_state
+    from openoutreach.crm.models import DealState
     from openoutreach.linkedin.db.leads import promote_lead_to_deal
 
     qualifier.update(embedding, label)
@@ -117,15 +118,17 @@ def _save_qualification_result(session, qualifier: BayesianQualifier, lead_id: i
             return
         logger.info("%s %s: %s", public_id, colored("QUALIFIED", "green", attrs=["bold"]), reason)
         # Enrich at the QUALIFIED gate (only qualified leads ever reach here).
-        # Tri-state: True = hit (proceed QUALIFIED), False = genuine miss (park
-        # in NO_EMAIL, out of the connect pool), None = finder off/unreachable
-        # (leave QUALIFIED to retry — a miss is free to re-attempt).
-        if deal.lead.resolve_api_email() is False:
-            from openoutreach.core.db.deals import set_profile_state
-            from openoutreach.crm.models import DealState
-
-            set_profile_state(session, public_id, DealState.NO_EMAIL.value,
-                              reason="No email found by finder")
+        # Router model as an explicit FSM fork — the state IS the routing:
+        #   hit  → QUALIFIED → READY_TO_EMAIL (the EMAIL send-queue; this is the
+        #          one transition the router makes — it must NOT write
+        #          READY_TO_CONNECT, which would bypass the GP confidence gate).
+        #   miss / finder-off / couldn't-run → stays QUALIFIED (no-op), so the
+        #          GP gate promotes it to READY_TO_CONNECT — the connect funnel is
+        #          its only door, and the connection harvests contact info on
+        #          acceptance. A miss is free to retry (BetterContact bills only
+        #          usable hits).
+        if deal.lead.resolve_api_email() is True:
+            set_profile_state(session, public_id, DealState.READY_TO_EMAIL)
     else:
         create_disqualified_deal(session, public_id, reason=reason)
 

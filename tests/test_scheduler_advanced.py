@@ -278,13 +278,16 @@ class TestPlanCheckPendingWindow:
         assert created == 4
 
     @patch("openoutreach.core.scheduler.ENABLE_ACTIVE_HOURS", False)
-    def test_includes_due_within_24h(self, fake_session):
+    def test_only_counts_deals_due_now(self, fake_session):
+        # Must match the handler's own due filter — counting deals due
+        # *later* would plan an immediate slot the handler finds nothing
+        # to do for, spinning reconcile in a tight no-op loop.
         self._make_due_pending(fake_session, "due_now", due_offset_hours=-1)
         self._make_due_pending(fake_session, "due_soon", due_offset_hours=12)
         self._make_due_pending(fake_session, "due_later", due_offset_hours=48)
         Task.objects.all().delete()
         created = scheduler.plan_check_pending_window(fake_session, fake_session.campaign)
-        assert created == 2  # due_now + due_soon (due_later is past 24h horizon)
+        assert created == 1  # only due_now; due_soon/due_later are not yet due
 
     @patch("openoutreach.core.scheduler.ENABLE_ACTIVE_HOURS", False)
     def test_noop_when_pending_exists(self, fake_session):
