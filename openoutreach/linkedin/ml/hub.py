@@ -80,8 +80,8 @@ def load_kit_model(kit_dir: Path):
         import joblib
         from sklearn.exceptions import InconsistentVersionWarning
 
-        # The shipped kit is pickled at a fixed sklearn version; tolerate skew
-        # with the locally installed version (the estimator still predicts fine).
+        # The published kit is pickled under whatever sklearn version trained it
+        # (currently 1.8.0); unpickling under a newer runtime is expected and safe.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", InconsistentVersionWarning)
             model = joblib.load(kit_dir / "model.joblib")
