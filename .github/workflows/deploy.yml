@@ -56,7 +56,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Trigger DO snapshot rebuild
+      # Notify the hub repo that a new image was published (image-updated).
+      # Prod runs on the shared GCP VM (Compute Engine), not a DigitalOcean snapshot.
+      - name: Notify hub of new image
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.GH_PAT }}
